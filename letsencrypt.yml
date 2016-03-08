@@ -1,0 +1,121 @@
+version: '2'
+
+services:
+
+    postgresql:
+        restart: always
+        image: sameersbn/postgresql:9.4-13
+        environment:
+            - DB_USER=gitlab
+            - DB_PASS=password
+            - DB_NAME=gitlabhq_production
+        volumes:
+            - /data/docker/gitlab/postgresql:/var/lib/postgresql
+        networks:
+            - backend
+
+    gitlab:
+        image: sameersbn/gitlab:8.5.1
+        links:
+            - redis:redisio
+            - postgresql
+        ports:
+            - "0.0.0.0:22:22"
+        depends_on:
+            - docker-gen
+        environment:
+            - DEBUG=false
+            - TZ=Europe/Paris
+            - GITLAB_TIMEZONE=Paris
+            - GITLAB_SECRETS_DB_KEY_BASE=TOCHANGEWITHAREALSECRETKEY
+
+            - GITLAB_HOST=git.example.com
+            - GITLAB_PORT=80
+            - GITLAB_SSH_PORT=22
+            - GITLAB_RELATIVE_URL_ROOT=
+            - GITLAB_NOTIFY_ON_BROKEN_BUILDS=true
+            - GITLAB_NOTIFY_PUSHER=false
+            - GITLAB_EMAIL=notifications@git.example.com
+            - GITLAB_EMAIL_REPLY_TO=noreply@git.example.com
+            - GITLAB_INCOMING_EMAIL_ADDRESS=reply@git.example.com
+            - GITLAB_BACKUPS=daily
+            - GITLAB_BACKUP_TIME=01:00
+
+            - GITLAB_HTTPS=true
+            - SSL_SELF_SIGNED=true
+
+            - SMTP_ENABLED=false
+            - IMAP_ENABLED=false
+
+            # V2 necessary config due to link deprecation
+            - DB_ADAPTER=postgresql
+            - DB_HOST=postgresql
+            - DB_USER=gitlab
+            - DB_PASS=password
+            - DB_NAME=gitlabhq_production
+            - DB_PORT=5432
+            - REDIS_HOST=redisio
+            - REDIS_PORT=6379
+
+            # Docker-gen config
+            - VIRTUAL_HOST=git.example.com
+            - VIRTUAL_PORT=80
+        volumes:
+            - /data/docker/gitlab/gitlab:/home/git/data
+        networks:
+            - backend
+
+    redis:
+        restart: always
+        image: sameersbn/redis:latest
+        volumes:
+            - /data/docker/gitlab/redis:/var/lib/redis
+        networks:
+            - backend
+
+    nginx-proxy:
+        restart: always
+        image: nginx
+        volumes:
+            - /data/docker/proxy/config:/etc/nginx/vhost.d
+            - /data/docker/proxy/certs:/etc/nginx/certs
+            - /data/docker/proxy/html:/usr/share/nginx/html
+        ports:
+            - "80:80"
+            - "443:443"
+        networks:
+            - frontend
+            - backend
+
+    docker-gen:
+        restart: always
+        image: jwilder/docker-gen
+        command: -notify-sighup gitlabautoproxy_nginx-proxy_1 -watch -only-exposed /etc/docker-gen/templates/nginx.tmpl /etc/nginx/conf.d/default.conf
+        volumes_from:
+            - nginx-proxy
+        volumes:
+            - /var/run/docker.sock:/tmp/docker.sock:ro
+            - /data/docker/proxy/templates/nginx.tmpl:/etc/docker-gen/templates/nginx.tmpl:ro
+        depends_on:
+            - nginx-proxy
+        networks:
+            - gen
+
+    letsencrypt:
+        restart: always
+        image: jcrs/letsencrypt-nginx-proxy-companion
+        volumes_from:
+            - nginx-proxy
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock:ro
+            - /data/docker/proxy/certs:/etc/nginx/certs:rw
+        networks:
+            - frontend
+
+networks:
+    backend:
+        driver: bridge
+    frontend:
+        driver: bridge
+    gen:
+        driver: bridge

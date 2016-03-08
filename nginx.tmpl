@@ -1,0 +1,103 @@
+{{ range $host, $containers := groupByMulti $ "Env.VIRTUAL_HOST" "," }}
+upstream {{ $host }} {
+
+{{ range $index, $value := $containers }}
+
+    {{ $addrLen := len $value.Addresses }}
+    {{ $network := index $value.Networks 0 }}
+
+    {{/* If only 1 port exposed, use that */}}
+    {{ if eq $addrLen 1 }}
+        {{ with $address := index $value.Addresses 0 }}
+            # {{$value.Name}}
+            server {{ $network.IP }}:{{ $address.Port }};
+        {{ end }}
+
+    {{/* If more than one port exposed, use the one matching VIRTUAL_PORT env var */}}
+    {{ else if $value.Env.VIRTUAL_PORT }}
+        {{ range $i, $address := $value.Addresses }}
+            {{ if eq $address.Port $value.Env.VIRTUAL_PORT }}
+            # {{$value.Name}}
+            server {{ $network.IP }}:{{ $address.Port }};
+            {{ end }}
+        {{ end }}
+
+    {{/* Else default to standard web port 80 */}}
+    {{ else }}
+        {{ range $i, $address := $value.Addresses }}
+            {{ if eq $address.Port "80" }}
+            # {{$value.Name}}
+            server {{ $network.IP }}:{{ $address.Port }};
+            {{ end }}
+        {{ end }}
+    {{ end }}
+{{ end }}
+}
+
+server {
+    listen                      80 default_server;
+    listen                      [::]:80 default_server;
+    server_name                 _;
+    return                      301 https://$host$request_uri;
+}
+
+server {
+    server_name                 {{ $host }};
+    listen                      443 ssl;
+    listen                      [::]:443 ssl;
+
+    ssl_certificate             /etc/nginx/certs/{{ trim $host }}.crt;
+    ssl_certificate_key         /etc/nginx/certs/{{ trim $host }}.key;
+    ssl_dhparam                 /etc/nginx/certs/{{ trim $host }}.dhparam.pem;
+
+    ssl_session_timeout         30m;
+    ssl_session_cache           shared:SSL:50m;
+    ssl_protocols               TLSv1 TLSv1.1 TLSv1.2;
+    ssl_ciphers                 HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers   on;
+
+    error_log                   /proc/self/fd/2;
+    access_log                  /proc/self/fd/1;
+
+    location / {
+        gzip off;
+        proxy_buffering             off;
+        proxy_set_header X-Forwarded-Ssl on;
+
+        proxy_pass http://{{ trim $host }};
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Frame-Options SAMEORIGIN;
+    }
+
+    # 6G Perishable Press: Queries String
+    # @ https://perishablepress.com/6g/
+    location ~* "(eval\()"  { return 444; }
+    location ~* "(127\.0\.0\.1)"  { return 444; }
+    location ~* "([a-z0-9]{2000})"  { return 444; }
+    location ~* "(javascript\:)(.*)(\;)"  { return 444; }
+    location ~* "(base64_encode)(.*)(\()"  { return 444; }
+    location ~* "(GLOBALS|REQUEST)(=|\[|%)"  { return 444; }
+    location ~* "(<|%3C).*script.*(>|%3)" { return 444; }
+    location ~ "(\\|\.\.\.|\.\./|~|`|<|>|\|)" { return 444; }
+    location ~* "(boot\.ini|etc/passwd|self/environ)" { return 444; }
+    location ~* "(thumbs?(_editor|open)?|tim(thumb)?)\.php" { return 444; }
+    location ~* "(\'|\")(.*)(drop|insert|md5|select|union)" { return 444; }
+
+    # 6G Perishable Press : Request String
+    # @ https://perishablepress.com/6g/
+    location ~* "(https?|ftp|php):/" { return 444; }
+    location ~* "(=\\\'|=\\%27|/\\\'/?)\." { return 444; }
+    location ~* "/(\$(\&)?|\*|\"|\.|,|&|&amp;?)/?$" { return 444; }
+    location ~ "(\{0\}|\(/\(|\.\.\.|\+\+\+|\\\"\\\")" { return 444; }
+    location ~ "(~|`|<|>|:|;|,|%|\\|\s|\{|\}|\[|\]|\|)" { return 444; }
+    location ~* "/(=|\$&|_mm|(wp-)?config\.|cgi-|etc/passwd|muieblack)" { return 444; }
+    location ~* "(&pws=0|_vti_|\(null\)|\{\$itemURL\}|echo(.*)kae|etc/passwd|eval\(|self/environ)" { return 444; }
+    location ~* "\.(aspx?|bash|bak?|cfg|cgi|dll|exe|git|hg|ini|jsp|log|mdb|out|sql|svn|swp|tar|rar|rdf)$" { return 444; }
+    location ~* "/(^$|mobiquo|phpinfo|shell|sqlpatch|thumb|thumb_editor|thumbopen|timthumb|webshell)\.php" { return 444; }
+}
+{{ end }}
